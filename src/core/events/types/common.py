@@ -4,7 +4,14 @@ import json
 import threading
 from src.core.types import InformationDisclosure, DenialOfService, RemoteCodeExec, IdentityTheft, PrivilegeEscalation, AccessRisk, UnauthenticatedAccess
 
+class EventFilterBase(object):
+    def __init__(self, event):
+        self.event = event
 
+    # Return event or None to skip 
+    def execute(self):
+        return self.event
+    
 class Event(object):
     def __init__(self):
         self.previous = None

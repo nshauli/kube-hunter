@@ -9,7 +9,7 @@ from __main__ import config
 
 from ..types import ActiveHunter, Hunter, HunterBase
 
-from ...core.events.types import HuntFinished, Vulnerability
+from ...core.events.types import HuntFinished, Vulnerability, EventFilterBase
 import threading
 
 global queue_lock
@@ -24,6 +24,7 @@ class EventQueue(Queue, object):
         self.all_hunters = dict()
 
         self.hooks = defaultdict(list)
+        self.filters = defaultdict(list)
         self.running = True
         self.workers = list()
 
@@ -57,6 +58,10 @@ class EventQueue(Queue, object):
         if HunterBase in hook.__mro__:
             self.all_hunters[hook] = hook.__doc__
 
+        if EventFilterBase in hook.__mro__:
+            self.filters[event].append((hook, predicate))
+            logging.debug('{} filter subscribed to {}'.format(hook, event))
+
         if hook not in self.hooks[event]:
             self.hooks[event].append((hook, predicate))
             logging.debug('{} subscribed to {}'.format(hook, event))
@@ -64,21 +69,36 @@ class EventQueue(Queue, object):
     # getting instantiated event object
     def publish_event(self, event, caller=None):
         logging.debug('Event {} got published with {}'.format(event.__class__, event))
+        # Marker whether we executed filters
+        filter_executed = 0
+        # Marker whether event must be skipped
+        skip_event = 0
+
+        if caller:
+            event.previous = caller.event
+            event.hunter = caller.__class__
+
         for hooked_event in self.hooks.keys():
             if hooked_event in event.__class__.__mro__:
                 for hook, predicate in self.hooks[hooked_event]:
                     if predicate and not predicate(event):
                         continue
-
-                    if caller:
-                        event.previous = caller.event
-                        event.hunter = caller.__class__
+                    if not filter_executed and hooked_event in self.filter.keys():
+                        for event_filter, predicate in self.filters[hooked_event]:
+                            if predicate and not predicate(event):
+                                continue
+                            if not event_filter(event).execute():
+                                skip_event = 1
+                                break
+                        filter_executed = 1
 
                     if config.statistics and caller:
                         if Vulnerability in event.__class__.__mro__:
                             caller.__class__.publishedVulnerabilities += 1
 
                     self.put(hook(event))
+                if skip_event:
+                    break
 
     # executes callbacks on dedicated thread as a daemon
     def worker(self):
